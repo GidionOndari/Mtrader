@@ -1,0 +1,216 @@
+version: '3.9'
+services:
+  postgres:
+    profiles: ["staging", "blue", "green"]
+    image: timescale/timescaledb-ha:pg16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - pgdata:/home/postgres/pgdata/data
+      - ./migrations:/docker-entrypoint-initdb.d
+    deploy:
+      resources:
+        limits: { cpus: '2.0', memory: 4G }
+
+  redis:
+    profiles: ["staging", "blue", "green"]
+    image: redis:7.4-alpine
+    command: ['redis-server', '--appendonly', 'yes']
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    deploy:
+      resources:
+        limits: { cpus: '1.0', memory: 1G }
+
+  api_gateway:
+    profiles: ["staging", "blue", "green"]
+    build:
+      context: .
+      dockerfile: api_gateway/Dockerfile
+    env_file: .env
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:8000/health']
+      interval: 20s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits: { cpus: '2.0', memory: 2G }
+
+  trading_service:
+    profiles: ["staging", "blue", "green"]
+    build:
+      context: .
+      dockerfile: trading_service/Dockerfile
+    env_file: .env
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:8010/health']
+      interval: 20s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits: { cpus: '2.0', memory: 2G }
+
+  market_data_service:
+    profiles: ["staging", "blue", "green"]
+    build:
+      context: .
+      dockerfile: market_data_service/Dockerfile
+    env_file: .env
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:8020/health']
+      interval: 20s
+      timeout: 5s
+      retries: 5
+
+  news_service:
+    profiles: ["staging", "blue", "green"]
+    build:
+      context: .
+      dockerfile: news_service/Dockerfile
+    env_file: .env
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:8030/health']
+      interval: 20s
+      timeout: 5s
+      retries: 5
+
+  backtest_service:
+    profiles: ["staging", "blue", "green"]
+    build:
+      context: .
+      dockerfile: backtest_service/Dockerfile
+    env_file: .env
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:8040/health']
+      interval: 20s
+      timeout: 5s
+      retries: 5
+
+  ml_service:
+    profiles: ["staging", "blue", "green"]
+    build:
+      context: .
+      dockerfile: ml_service/Dockerfile
+    env_file: .env
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:8050/health']
+      interval: 20s
+      timeout: 5s
+      retries: 5
+
+  scheduler_service:
+    profiles: ["staging", "blue", "green"]
+    build:
+      context: .
+      dockerfile: scheduler_service/Dockerfile
+    env_file: .env
+    command: uvicorn scheduler_service.src.app:app --host 0.0.0.0 --port 8000
+    depends_on:
+      redis: { condition: service_healthy }
+      postgres: { condition: service_healthy }
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:8000/health']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  notifier_service:
+    profiles: ["staging", "blue", "green"]
+    build:
+      context: .
+      dockerfile: notifier_service/Dockerfile
+    env_file: .env
+    depends_on:
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:8070/health']
+      interval: 20s
+      timeout: 5s
+      retries: 5
+
+  frontend:
+    profiles: ["staging", "blue", "green"]
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    env_file: .env
+    depends_on:
+      api_gateway: { condition: service_healthy }
+
+  nginx:
+    profiles: ["staging", "blue", "green"]
+    image: nginx:1.27-alpine
+    volumes:
+      - ./deploy/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./deploy/certs:/etc/nginx/certs:ro
+    ports:
+      - '80:80'
+      - '443:443'
+    depends_on:
+      frontend: { condition: service_started }
+      api_gateway: { condition: service_healthy }
+
+  prometheus:
+    profiles: ["staging", "blue", "green"]
+    image: prom/prometheus:v2.54.1
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports: ['9090:9090']
+
+  grafana:
+    profiles: ["staging", "blue", "green"]
+    image: grafana/grafana:11.2.2
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+    ports: ['3000:3000']
+    depends_on:
+      prometheus: { condition: service_started }
+
+  jaeger:
+    profiles: ["staging", "blue", "green"]
+    image: jaegertracing/all-in-one:1.62
+    ports: ['16686:16686', '14268:14268']
+
+networks:
+  default:
+    name: mtrader-prod
+
+volumes:
+  pgdata:
+  postgres_data_staging:
+  postgres_data_blue:
+  postgres_data_green:
+  redis_data_staging:
+  redis_data_blue:
+  redis_data_green:

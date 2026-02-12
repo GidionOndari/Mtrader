@@ -1,0 +1,32 @@
+groups:
+  - name: trading_os_alerts
+    interval: 30s
+    rules:
+      - alert: HighOrderRejectionRate
+        expr: rate(order_status_changes_total{status="rejected"}[5m]) / rate(order_status_changes_total[5m]) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Order rejection rate > 5% for 2 minutes"
+      - alert: MT5Disconnected
+        expr: mt5_connection_status == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "MT5 broker disconnected"
+      - alert: RiskIncidentsSpike
+        expr: increase(risk_incidents_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Risk incidents detected in the last 5 minutes"
+      - alert: HighOrderLatencyP95
+        expr: histogram_quantile(0.95, sum(rate(order_processing_duration_seconds_bucket[5m])) by (le)) > 0.5
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Order processing p95 latency > 500ms"

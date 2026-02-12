@@ -1,0 +1,27 @@
+{
+  "title": "Trading OS",
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+    {"type":"timeseries","title":"Orders per second","targets":[{"expr":"sum(rate(order_submissions_total[1m]))"},{"expr":"sum(rate(order_submissions_total[5m]))"},{"expr":"sum(rate(order_submissions_total[15m]))"}]},
+    {"type":"timeseries","title":"Order fill ratio","targets":[{"expr":"sum(rate(order_filled_total[5m])) / sum(rate(order_submissions_total[5m]))"}],"fieldConfig":{"defaults":{"thresholds":{"mode":"absolute","steps":[{"color":"red","value":0},{"color":"yellow","value":0.95},{"color":"green","value":0.99}]}}}},
+    {"type":"timeseries","title":"Order latency p50/p95/p99","targets":[{"expr":"histogram_quantile(0.50,sum(rate(order_processing_duration_seconds_bucket[5m])) by (le))"},{"expr":"histogram_quantile(0.95,sum(rate(order_processing_duration_seconds_bucket[5m])) by (le))"},{"expr":"histogram_quantile(0.99,sum(rate(order_processing_duration_seconds_bucket[5m])) by (le))"}]},
+    {"type":"timeseries","title":"Order status breakdown","targets":[{"expr":"sum(rate(order_status_changes_total{status=\"FILLED\"}[5m]))"},{"expr":"sum(rate(order_status_changes_total{status=\"REJECTED\"}[5m]))"},{"expr":"sum(rate(order_status_changes_total{status=\"CANCELED\"}[5m]))"},{"expr":"sum(rate(order_status_changes_total{status=\"PARTIAL\"}[5m]))"}]},
+    {"type":"stat","title":"MT5 connection status","targets":[{"expr":"mt5_connection_status"}]},
+    {"type":"timeseries","title":"WebSocket connections per instance","targets":[{"expr":"sum by(instance) (ws_connections_total)"}]},
+    {"type":"timeseries","title":"Reconnection events","targets":[{"expr":"sum(rate(mt5_reconnect_total[5m]))"}]},
+    {"type":"timeseries","title":"Heartbeat latency","targets":[{"expr":"histogram_quantile(0.95,sum(rate(ws_heartbeat_latency_seconds_bucket[5m])) by (le))"}]},
+    {"type":"timeseries","title":"Current drawdown %","targets":[{"expr":"current_drawdown_percent"}],"fieldConfig":{"defaults":{"thresholds":{"mode":"absolute","steps":[{"color":"green","value":0},{"color":"yellow","value":10},{"color":"red","value":20}]}}}},
+    {"type":"timeseries","title":"Daily loss vs limit","targets":[{"expr":"daily_loss_percent"},{"expr":"daily_loss_limit_percent"}]},
+    {"type":"stat","title":"Kill switch status","targets":[{"expr":"kill_switch_status"}]},
+    {"type":"heatmap","title":"Risk incidents by rule type","targets":[{"expr":"sum(rate(risk_incidents_total[5m])) by (rule)"}]},
+    {"type":"timeseries","title":"API response time p95","targets":[{"expr":"histogram_quantile(0.95,sum(rate(http_server_request_duration_seconds_bucket[5m])) by (le))"}]},
+    {"type":"timeseries","title":"Database query duration","targets":[{"expr":"histogram_quantile(0.95,sum(rate(db_query_duration_seconds_bucket[5m])) by (le))"}]},
+    {"type":"timeseries","title":"Backtest queue depth","targets":[{"expr":"backtest_queue_depth"}]},
+    {"type":"timeseries","title":"CPU/Memory per service","targets":[{"expr":"sum by(container) (rate(container_cpu_usage_seconds_total[5m]))"},{"expr":"sum by(container) (container_memory_working_set_bytes)"}]},
+    {"type":"stat","title":"Active strategies","targets":[{"expr":"active_strategies_total"}]},
+    {"type":"stat","title":"Open positions","targets":[{"expr":"open_positions_total"}]},
+    {"type":"timeseries","title":"Account equity curve","targets":[{"expr":"account_equity"}]},
+    {"type":"timeseries","title":"Daily P&L","targets":[{"expr":"daily_pnl"}]}
+  ]
+}

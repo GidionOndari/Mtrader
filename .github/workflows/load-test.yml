@@ -1,0 +1,38 @@
+name: nightly-load-test
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  load-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: grafana/setup-k6-action@v1
+      - name: Run websocket load
+        run: k6 run tests/load/websocket.js --out json=ws-results.json
+        env:
+          WS_URL: ${{ secrets.STAGING_WS_URL }}
+          WS_TOKEN_PREFIX: ${{ secrets.STAGING_WS_TOKEN_PREFIX }}
+      - name: Run order load
+        run: k6 run tests/load/orders.js --out json=orders-results.json
+        env:
+          API_URL: ${{ secrets.STAGING_API_URL }}
+          API_TOKEN: ${{ secrets.STAGING_API_TOKEN }}
+      - name: Validate SLOs
+        run: python scripts/analyze_load_results.py ws-results.json orders-results.json
+      - name: Build HTML report
+        run: python scripts/build_load_report.py ws-results.json orders-results.json load-report.html
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-load-report
+          path: load-report.html
+      - name: Slack notify
+        uses: slackapi/slack-github-action@v1.27.0
+        if: always()
+        with:
+          payload: '{"text":"Nightly load test: ${{ job.status }} - ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}'
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

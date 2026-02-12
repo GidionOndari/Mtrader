@@ -1,0 +1,24 @@
+name: weekly-security-scan
+on:
+  schedule:
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - run: pip install pip-audit bandit
+      - run: pip-audit
+      - run: bandit -r app trading_service market_data_service news_service backtest_service ml_service
+      - uses: github/codeql-action/init@v3
+        with: { languages: python,javascript }
+      - uses: github/codeql-action/analyze@v3
+      - uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+      - run: npm --prefix frontend audit --audit-level=high || true

@@ -1,0 +1,37 @@
+groups:
+  - name: trading_os_alerts
+    interval: 30s
+    rules:
+      - alert: HighOrderRejectionRate
+        expr: rate(order_rejections_total[5m]) / rate(order_submissions_total[5m]) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Order rejection rate > 5% for 2 minutes"
+      - alert: MT5Disconnected
+        expr: mt5_connection_status == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "MT5 broker disconnected"
+      - alert: DrawdownLimitApproaching
+        expr: current_drawdown_percent > 15
+        labels:
+          severity: warning
+        annotations:
+          summary: "Drawdown at {{ $value }}%, limit is 20%"
+      - alert: KillSwitchEngaged
+        expr: kill_switch_status == 1
+        labels:
+          severity: critical
+        annotations:
+          summary: "KILL SWITCH ENGAGED - Manual intervention required"
+      - alert: DatabaseConnectionHigh
+        expr: rate(postgres_connections_total[1m]) > 50
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High database connection count"
