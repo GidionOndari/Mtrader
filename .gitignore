@@ -1,0 +1,3 @@
+
+deploy/certs/*.key
+deploy/certs/*.crt

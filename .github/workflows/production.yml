@@ -1,0 +1,127 @@
+name: production-pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+      - run: python -m pip install --upgrade pip
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+      - run: black --check .
+      - run: isort --check-only .
+      - run: flake8 .
+      - run: mypy app api_gateway trading_service market_data_service news_service backtest_service ml_service scheduler_service notifier_service
+      - run: pytest --cov=app --cov=trading_service --cov=market_data_service --cov=news_service --cov=backtest_service --cov=ml_service --cov-fail-under=85
+      - run: python -c "from api_gateway.src.routes.ws import router"
+      - run: python -c "from api_gateway.src.ws.manager import RedisConnectionManager"
+      - run: npm --prefix frontend ci
+      - run: npm --prefix frontend test -- --coverage --watch=false
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: gitleaks/gitleaks-action@v2
+      - uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+
+  migration-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: timescale/timescaledb:latest-pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: mtrader_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d mtrader_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+      - run: MIGRATION_TEST_DSN=postgresql://postgres:postgres@localhost:5432/mtrader_test python scripts/migration_test.py
+      - run: MIGRATION_TEST_DSN=postgresql://postgres:postgres@localhost:5432/mtrader_test alembic upgrade head
+      - run: MIGRATION_TEST_DSN=postgresql://postgres:postgres@localhost:5432/mtrader_test alembic downgrade -1
+      - run: MIGRATION_TEST_DSN=postgresql://postgres:postgres@localhost:5432/mtrader_test alembic downgrade base
+      - run: MIGRATION_TEST_DSN=postgresql://postgres:postgres@localhost:5432/mtrader_test alembic upgrade head
+      - run: MIGRATION_TEST_DSN=postgresql://postgres:postgres@localhost:5432/mtrader_test python scripts/verify_migration.py
+
+  build:
+    needs: [validate, security, migration-test]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    strategy:
+      matrix:
+        service: [api_gateway,trading_service,market_data_service,news_service,backtest_service,ml_service,scheduler_service,notifier_service,frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Login
+        run: echo "${{ secrets.REGISTRY_PASSWORD }}" | docker login ${{ secrets.REGISTRY }} -u ${{ secrets.REGISTRY_USER }} --password-stdin
+      - name: Build image
+        run: docker build -f ./${{ matrix.service }}/Dockerfile -t ${{ secrets.REGISTRY }}/mtrader-${{ matrix.service }}:${{ github.sha }} .
+      - name: Scan image
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ secrets.REGISTRY }}/mtrader-${{ matrix.service }}:${{ github.sha }}
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+      - name: Push image
+        run: docker push ${{ secrets.REGISTRY }}/mtrader-${{ matrix.service }}:${{ github.sha }}
+
+  deploy-staging:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Docker
+        uses: docker/setup-buildx-action@v3
+      - name: Install Docker Compose
+        run: |
+          sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+          sudo chmod +x /usr/local/bin/docker-compose
+      - run: bash scripts/deploy.sh staging ${{ github.sha }}
+
+  deploy-canary:
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/deploy.sh canary ${{ github.sha }}
+      - run: bash scripts/canary-check.sh ${{ github.sha }}
+      - if: failure()
+        run: bash scripts/rollback.sh "INC-${{ github.run_id }}"
+
+  deploy-production:
+    needs: deploy-canary
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    environment:
+      name: production
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/deploy.sh production ${{ github.sha }}

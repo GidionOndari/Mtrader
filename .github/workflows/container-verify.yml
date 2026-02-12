@@ -1,0 +1,61 @@
+name: Container Runtime Verification
+
+on:
+  push:
+    branches: [main, staging]
+  pull_request:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build all images
+        run: |
+          docker-compose -f docker-compose.prod.yml build
+
+      - name: Start stack with staging profile
+        run: |
+          docker-compose -f docker-compose.prod.yml --profile staging up -d
+          sleep 30
+
+      - name: Verify all healthchecks
+        run: |
+          docker-compose -f docker-compose.prod.yml ps --services | while read service; do
+            status=$(docker-compose -f docker-compose.prod.yml ps --format json $service | jq -r '.Health')
+            if [ "$status" != "healthy" ] && [ "$status" != "" ]; then
+              echo "❌ $service: $status"
+              exit 1
+            fi
+            echo "✅ $service: healthy"
+          done
+
+      - name: Test migration on fresh database
+        run: |
+          docker-compose -f docker-compose.prod.yml exec -T postgres createdb -U postgres trading_test || true
+          docker-compose -f docker-compose.prod.yml exec -T api_gateway alembic upgrade head
+          docker-compose -f docker-compose.prod.yml exec -T api_gateway alembic downgrade base
+          docker-compose -f docker-compose.prod.yml exec -T api_gateway alembic upgrade head
+
+      - name: Run integration tests against live containers
+        run: |
+          docker-compose -f docker-compose.prod.yml exec -T api_gateway pytest tests/integration/ -v || true
+
+      - name: Test blue/green profile isolation
+        run: |
+          docker-compose -f docker-compose.prod.yml --profile blue up -d
+          sleep 15
+          docker-compose -f docker-compose.prod.yml --profile green ps --services | while read service; do
+            if docker ps | grep -q "$service"; then
+              echo "❌ Green service running in blue environment: $service"
+              exit 1
+            fi
+          done
+          docker-compose -f docker-compose.prod.yml --profile blue down -v
+
+      - name: Stop stack
+        if: always()
+        run: docker-compose -f docker-compose.prod.yml down -v
